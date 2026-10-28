@@ -832,7 +832,13 @@ struct KnobWheelTests : juce::UnitTest {
     c.mouseWheelMove(e, w);
   }
 
-  static constexpr float kNotch = -0.04f;  // one notched click, as JUCE reports it
+  // One physical click, as JUCE reports it on Windows: WHEEL_DELTA (120)
+  // through the 0.5/256 page scaling, so 0.234375 pages. Positive deltaY is
+  // what JUCE sends for a forward turn (away from the user), which is what
+  // raises a value, so kNotch is a forward click and -kNotch a backward one.
+  // The earlier version used -0.04f: a trackpad fraction, five times too fine,
+  // and with the sign read as "forward".
+  static constexpr float kNotch = 0.5f * 120.0f / 256.0f;
 
   static Knob::Options options(int steps = 0) {
     Knob::Options o;
@@ -863,17 +869,24 @@ struct KnobWheelTests : juce::UnitTest {
   };
 
   void runTest() override {
-    beginTest("one notch moves about 1% of the range, Shift divides by 8");
+    beginTest("one click moves one arrow-key step, forward raises, Shift divides by 8");
     {
+      // One click is one arrow press (kKeyStep = 1 % of the range), and a
+      // forward turn raises the value -- the same direction as the knob's own
+      // drag and arrow keys, and as the EQ curve and faders one screen away.
       Knob k(options());
       k.setValue(0.5f);
       wheelTo(k, faceCentre(k), kNotch);
-      expectWithinAbsoluteError(k.value(), 0.5f + 0.01024f, 1.0e-4f);
+      expectWithinAbsoluteError(k.value(), 0.51f, 1.0e-4f);
+
+      // The opposite turn lowers it, by the same amount.
+      wheelTo(k, faceCentre(k), -kNotch);
+      expectWithinAbsoluteError(k.value(), 0.5f, 1.0e-4f);
 
       Knob fine(options());
       fine.setValue(0.5f);
       wheelTo(fine, faceCentre(fine), kNotch, juce::ModifierKeys::shiftModifier);
-      expectWithinAbsoluteError(fine.value(), 0.5f + 0.01024f / 8.0f, 1.0e-4f);
+      expectWithinAbsoluteError(fine.value(), 0.5f + 0.01f / 8.0f, 1.0e-4f);
     }
 
     beginTest("the wheel acts over the face only: the label slot is a tap target");
