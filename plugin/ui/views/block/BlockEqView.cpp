@@ -19,10 +19,10 @@ namespace t3k::ui {
 
 namespace {
 
+using eq::kBodyPad;
 using eq::kGraphH;
 using eq::kGraphW;
 
-constexpr int kBodyPadding = 16;
 constexpr int kDimMs = 200;
 // Controls stay black/white/gray (like the knobs); the only colour in the EQ
 // is the brand-gradient spectrum behind everything.
@@ -67,7 +67,7 @@ void paintGrid(juce::Graphics& g) {
     // SVG <text y> is the baseline.
     g.setColour(kAxisLabel);
     g.setFont(Fonts::sans(kAxisFontPx));
-    g.drawSingleLineText(kGridLabels[i], juce::roundToInt(x + 4), kGraphH - kBodyPadding);
+    g.drawSingleLineText(kGridLabels[i], juce::roundToInt(x + 4), kGraphH - kBodyPad);
   }
   for (double db : {-7.5, 7.5}) {
     const float y = static_cast<float>(eq::gainToY(db));
@@ -188,7 +188,7 @@ public:
       const juce::String band = "Band " + juce::String(selected_ + 1);
       const juce::String rest = juce::String::fromUTF8(" \xC2\xB7 ") + eq::typeLabel(bands[static_cast<size_t>(selected_)].type);
       const int bandW = juce::roundToInt(Fonts::width(font, band));
-      const juce::Rectangle<int> row(kBodyPadding, kBodyPadding, 300, juce::roundToInt(11 * 1.2f));
+      const juce::Rectangle<int> row(kBodyPad, kBodyPad, 300, juce::roundToInt(11 * 1.2f));
       g.setFont(font);
       g.setColour(juce::Colours::black.withAlpha(0.9f));
       g.drawText(band + rest, row.translated(0, 1), juce::Justification::centredLeft, false);
@@ -256,7 +256,7 @@ public:
       chip->setTopLeftPosition(x, 0);
       x += chip->getWidth() + kChromeGap;
     }
-    chrome_.setBounds(kBodyPadding, eq::kBodyH - (kBodyPadding + 12) - h, x - kChromeGap, h);
+    chrome_.setBounds(kBodyPad, eq::kBodyH - (kBodyPad + 12) - h, x - kChromeGap, h);
   }
 
   // Dots
@@ -590,7 +590,7 @@ public:
       const juce::String label = db > 0 ? "+" + juce::String(db) : juce::String(db);
       // translateY(2rem) under the rule; JUCE's ascent sits a pixel lower
       // than the browser's line box, hence +1.
-      g.drawText(label, juce::Rectangle<int>(kBodyPadding, juce::roundToInt(y) + 1, 40, juce::roundToInt(kAxisFontPx)),
+      g.drawText(label, juce::Rectangle<int>(kBodyPad, juce::roundToInt(y) + 1, 40, juce::roundToInt(kAxisFontPx)),
                  juce::Justification::topLeft, false);
     }
 
@@ -722,32 +722,51 @@ public:
     if (col >= 0 && eq::hasGain(owner_.bands()[static_cast<size_t>(col)].type)) setGain(col, 0);
   }
 
+  // Driven by BlockEqView::mouseWheelMove. A wheel burst reuses the drag's
+  // machinery rather than inventing a second one: readoutIndex_ paints the
+  // live value, setDragging suppresses native resyncs, and the readout
+  // timer's 250 ms is the same gap that defines a burst everywhere else in
+  // the UI (Knob, DragScroller). Restarting the timer IS the burst extension.
+  void wheelAt(juce::Point<float> pos, float pixels, bool fine) {
+    const int col = columnAt(pos);
+    if (col < 0) return;
+    const auto& bands = owner_.bands();
+    const auto& band = bands[static_cast<size_t>(col)];
+    if (!eq::hasGain(band.type)) return;  // a pass band has no gain to turn
+    const double target =
+        juce::jlimit(-kEqMaxAbsGainDb, kEqMaxAbsGainDb, band.gainDb + eq::faderGainDb(pixels, fine));
+    // At a hard stop, or with a step too small to move a double, write
+    // nothing: no undo step, no burst, no readout for a non-change.
+    if (target == band.gainDb) return;
+    readoutIndex_ = col;
+    owner_.setDragging(true);
+    setGain(col, target);
+    startTimer(kReadoutHoldMs);
+    repaint();
+  }
+
 private:
   static constexpr int kSize = 30;  // fader scale (the card knobs' size prop)
   static constexpr int kCapW = kSize;
   static constexpr int kCapH = 14;  // round(size * 0.47)
   static constexpr float kTrackW = 8;  // max(4, round(size * 0.27))
-  static constexpr int kThumbPad = 7;  // ceil(capH / 2): keeps the cap inside the travel
-  static constexpr int kFreqRowH = 16;
-  static constexpr int kAxisInset = 4;
+  static constexpr int kThumbPad = eq::kFaderThumbPad;
+  static constexpr int kFreqRowH = eq::kFaderFreqRowH;
+  static constexpr int kAxisInset = eq::kFaderAxisInset;
   static constexpr float kGlyphW = 12, kGlyphH = 11, kGlyphGap = 4;
   static constexpr int kReadoutHoldMs = 250;
 
   // The fader travel (cap-centre range): the region under the top pad and
   // above the label row, less the thumb pad each end.
   juce::Rectangle<int> travelBounds() const {
-    return {0, kBodyPadding + kThumbPad, kGraphW, eq::kBodyH - kBodyPadding - kAxisInset - kFreqRowH - 2 * kThumbPad};
+    return {0, kBodyPad + kThumbPad, kGraphW, eq::kBodyH - kBodyPad - kAxisInset - kFreqRowH - 2 * kThumbPad};
   }
   juce::Rectangle<int> labelRow() const { return {0, eq::kBodyH - kAxisInset - kFreqRowH, kGraphW, kFreqRowH}; }
-  float columnWidth() const { return static_cast<float>(kGraphW - 2 * kBodyPadding) / kEqNumBands; }
-  float columnCentre(int i) const { return kBodyPadding + (static_cast<float>(i) + 0.5f) * columnWidth(); }
-  int columnAt(juce::Point<float> p) const {
-    const auto region = juce::Rectangle<int>(kBodyPadding, kBodyPadding, kGraphW - 2 * kBodyPadding,
-                                             eq::kBodyH - kBodyPadding - kAxisInset - kFreqRowH);
-    if (!region.toFloat().contains(p)) return -1;
-    const int col = static_cast<int>((p.x - kBodyPadding) / columnWidth());
-    return juce::jlimit(0, static_cast<int>(owner_.bands().size()) - 1, col);
-  }
+  float columnWidth() const { return static_cast<float>(kGraphW - 2 * kBodyPad) / kEqNumBands; }
+  float columnCentre(int i) const { return kBodyPad + (static_cast<float>(i) + 0.5f) * columnWidth(); }
+  // Clamped to the bands actually present, so a shorter chain still indexes
+  // its own columns (kEqNumBands is only the design-time count).
+  int columnAt(juce::Point<float> p) const { return eq::faderColumnAt(p, static_cast<int>(owner_.bands().size())); }
   float yForGain(double db) const {
     const auto travel = travelBounds();
     return static_cast<float>(travel.getY()) + static_cast<float>(travel.getHeight()) *
@@ -766,6 +785,9 @@ private:
   void timerCallback() override {
     stopTimer();
     readoutIndex_ = -1;
+    // The wheel burst has no mouseUp, so the timer is what ends it. A drag
+    // clears the flag itself in mouseUp; clearing it again is harmless.
+    owner_.setDragging(false);
     repaint();
   }
 
@@ -847,6 +869,21 @@ std::pair<double, double> BlockEqView::freqRange(int index) const {
 }
 
 void BlockEqView::paint(juce::Graphics& g) { g.fillAll(theme::kBlack); }
+
+void BlockEqView::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) {
+  // A bypassed EQ is dimmed but this view is still a live wheel target, so
+  // the guard has to be here (setEqEnabled only stops the editors).
+  if (!enabled_) return;
+  // macOS momentum outlives the finger: the burst has ended by then, and a
+  // fader that keeps creeping after release is a bug (same as the knobs).
+  if (wheel.isInertial) return;
+  // On view_, not on whichever child got the event, so the two paths cannot
+  // drift if Sliders ever grows a handler of its own.
+  if (view_ != View::sliders) return;
+  const float px = wheel::pixelsY(wheel);
+  if (juce::exactlyEqual(px, 0.0f)) return;
+  sliders_->wheelAt(e.getEventRelativeTo(sliders_.get()).position, px, e.mods.isShiftDown());
+}
 
 void BlockEqView::resized() {
   for (auto* layer : {grid_.get(), spectrum_.get(), static_cast<juce::Component*>(graph_.get()),

@@ -8,6 +8,7 @@
 
 #include <vector>
 
+#include "core/Wheel.h"
 #include "model/ChainState.h"
 
 namespace t3k::ui::eq {
@@ -60,6 +61,49 @@ inline double gainToY(double gainDb) {
 }
 inline double yToGain(double y) {
   return ((kGraphH / 2.0 - y) / (kGraphH / 2.0 - kGraphPadY)) * kEqMaxAbsGainDb;
+}
+
+// Fader view (EqSliders.tsx), in the same body space as the curve. The
+// pad is shared with the Graph's chrome row and band readout; the rest is
+// the fader's own layout, kept here so its hit test is testable without a
+// Component.
+inline constexpr int kBodyPad = 16;
+inline constexpr int kFaderThumbPad = 7;  // ceil(capH / 2): keeps the cap inside the travel
+inline constexpr int kFaderFreqRowH = 16;
+inline constexpr int kFaderAxisInset = 4;
+
+// The region a fader can be grabbed in: the body less the top pad and the
+// frequency-label row. Wider than travelBounds() by the thumb pad each end,
+// so a grab just outside the cap still lands.
+inline juce::Rectangle<float> faderRegion() {
+  return {static_cast<float>(kBodyPad), static_cast<float>(kBodyPad),
+          static_cast<float>(kGraphW - 2 * kBodyPad),
+          static_cast<float>(kBodyH - kBodyPad - kFaderAxisInset - kFaderFreqRowH)};
+}
+
+// Fader column under a point, or -1 outside the fader region. The column
+// width is the design-time kEqNumBands, exactly as the paint lays the faders
+// out, so a hit test and its pixels cannot disagree; `bandCount` only clamps
+// the index to the bands actually present.
+inline int faderColumnAt(juce::Point<float> pos, int bandCount) {
+  if (bandCount <= 0 || !faderRegion().contains(pos)) return -1;
+  const float width = static_cast<float>(kGraphW - 2 * kBodyPad) / static_cast<float>(kEqNumBands);
+  const int col = static_cast<int>((pos.x - kBodyPad) / width);
+  return juce::jlimit(0, bandCount - 1, col);
+}
+
+// One click's gain change, in dB. Settled on hardware over three passes: 1 dB
+// overshot a normal ear move, 0.5 dB lands on the readout's own smallest step.
+inline constexpr double kFaderDbPerNotch = 0.5;
+
+// One wheel event's gain change in dB. The sign matches the curve's, which
+// multiplies Q by exp(-pixelsY * 0.003): pixelsY is the web deltaY, so
+// positive is scroll *down*, and the negated sign means scrolling up boosts.
+// Both surfaces then move the same way for the same gesture, on one screen.
+// Shift divides by wheel::kFineDivisor, the UI's shared fine factor.
+inline double faderGainDb(float pixels, bool fine) {
+  const double notches = static_cast<double>(pixels) / static_cast<double>(wheel::kNotchPixels);
+  return -notches * kFaderDbPerNotch / (fine ? wheel::kFineDivisor : 1.0f);
 }
 
 }  // namespace t3k::ui::eq

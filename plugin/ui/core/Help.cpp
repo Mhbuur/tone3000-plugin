@@ -238,7 +238,7 @@ std::map<Key, String> buildTable() {
 
   // EQ editor
   t[Key::eqFader] = kTouch ? U("Band Fader: gain, ±15 dB. drag: adjust · double tap: reset.")
-                           : U("Band Fader: gain, ±15 dB. ") + shift("drag") +
+                           : U("Band Fader: gain, ±15 dB. drag / scroll: adjust · ") + shift("drag / scroll") +
                                  U(": fine · double-click / ") + alt("click") + ": reset.";
   t[Key::eqFaderPass] = U("Pass Band: no gain. Shape it in Curve view.");
   t[Key::eqDot] = kTouch ? U("Band Dot: drag: freq + gain · double tap: reset. Q: two fingers — spread to widen the band, pinch to narrow it.")

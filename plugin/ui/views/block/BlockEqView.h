@@ -11,9 +11,13 @@
 //
 // Interaction conventions (mirroring the knobs): Shift = 8x finer, Alt-click
 // (touch: double tap) resets a band's effect without touching its
-// frequency. Both views draw into the same card-body space so the live
-// spectrum behind them lines up. Bands are held optimistically; native's
-// resyncs are ignored mid-drag so a stale snapshot can't fight the pointer.
+// frequency. Both views take the scroll wheel — the curve tunes the selected
+// band's Q, a fader turns its own band's gain (1 dB per notch, up = boost,
+// agreeing with the curve) — and a burst is one undo step with the value
+// read out while it turns. Both views draw into the same card-body space so
+// the live spectrum behind them lines up. Bands are held optimistically;
+// native's resyncs are ignored mid-drag so a stale snapshot can't fight the
+// pointer.
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -44,6 +48,11 @@ public:
 
   void paint(juce::Graphics& g) override;
   void resized() override;
+  // Faders only: Graph keeps its own handler, so a wheel over the curve never
+  // reaches this one. Reached when the wheel is over the faders (they have no
+  // handler, so it bubbles) or over a bypassed EQ (the editors stop
+  // intercepting then, but this view stays a live target).
+  void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
   // Shared by the two editors.
   class Graph;
