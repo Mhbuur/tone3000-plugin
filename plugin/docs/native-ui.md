@@ -496,6 +496,42 @@ Faceplate knobs and toggles bind via `juce::ParameterAttachment` to
 `backend.parameter(id)`. `MockBackend` owns a minimal `juce::AudioProcessor`
 with the same parameter ids so attachments behave identically in the testbed.
 
+### 5.13a The scroll wheel
+Every value control takes the wheel; scroll areas pan instead. The unit is
+converted once (`core/Wheel.h`: JUCE reports abstract "pages", the web's
+`WheelEvent.deltaY` was in CSS pixels) and each control owns its own
+notch-to-value rate beside its math, so the gesture is a pure function and
+testable without a window.
+
+Four rules hold everywhere:
+
+- **Shift is 1/8.** One shared divisor (`wheel::kFineDivisor`), not a factor
+  per control.
+- **Momentum is ignored.** `isInertial` outlives the finger on macOS; a value
+  that keeps creeping after release is a bug, so every handler returns early.
+- **A burst is one gesture.** A gap of 250 ms ends it, and it maps to one
+  readout that lingers for the same 250 ms and one undo step. The knob keeps
+  its own bracket because its value is an APVTS parameter; the EQ faders key
+  on the band's chain-history entry instead.
+- **Wheel over a text field is the field's.** A control stands down while its
+  inline editor is open, so a wheel never fights the caret.
+
+The EQ's faders add one thing: `BlockEqView::mouseWheelMove` dispatches to the
+visible editor, so a wheel over a bypassed EQ does nothing (bypassing only
+stops the *editors* intercepting clicks, not the view itself). `Graph` keeps
+its own handler, so the curve's gesture is untouched.
+
+One notch: 0.5 dB on a fader (`eq::kFaderDbPerNotch`), ~1 % of range on a
+knob, a factor on the curve's Q. The fader's rate is 0.5 rather than 1.0
+because 1 dB overshot a normal move in the hand: 60 clicks span the ±15 dB
+range and Shift makes each 0.0625 dB. The shared unit is
+`wheel::kNotchPixels`, derived from JUCE's own scaling
+(`0.5f * 120.0f / 256.0f * kPixelsPerUnit`, i.e. one `WHEEL_DELTA` click = 120
+px) rather than a literal, so "one notch" means one physical click. The first
+cut of the fader law used the ~0.04 pages a *trackpad's* fine deltas average
+to and moved 5.9 dB per click — do not take that figure from the `deltaY`
+comments as the notch size.
+
 ### 5.14 OAuth in the system browser
 Replaces `useT3kSelect` navigation. `OAuthFlow`:
 

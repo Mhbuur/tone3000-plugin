@@ -200,6 +200,13 @@ from (`port of KnobControl.tsx`); that is lineage, recorded in
   a new screen is reviewed by eye against the Figma mockups.
 - **Logic.** Pure logic (parsers, state machines, math) is tested in
   `testbed/SelfTests.cpp`, one `juce::UnitTest` per file it covers.
+- **Scroll wheel.** A value control takes the wheel; a scroll area pans. The
+  one notch-to-value law lives with the control's math (`core/Wheel.h` for the
+  unit, the control's own `core/*.h` for its rate), so a wheel gesture stays
+  testable without a window. Shift is the shared 8× fine factor, momentum
+  (`isInertial`) is ignored, and a burst is one gesture: the readout lingers
+  and one undo step covers it. The knobs, the EQ curve and the EQ's gain
+  faders all follow this; a fader's one notch is 0.5 dB.
 - **Icons.** Lucide glyphs come from `script/gen-lucide-icons.mjs` (add the
   name to its `ICONS` list, run it, use `Icon::<Name>`) and are never
   hand-edited; brand and gear artwork are in `CustomIcons` / `GearGlyphs`
