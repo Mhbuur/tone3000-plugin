@@ -17,6 +17,7 @@
 #include "Drive.h"
 #include "Host.h"
 #include "core/Design.h"
+#include "core/EqMath.h"
 #include "core/Fonts.h"
 #include "core/Help.h"
 #include "core/KnobScale.h"
@@ -24,6 +25,7 @@
 #include "core/Pitch.h"
 #include "core/RichText.h"
 #include "core/TextFlow.h"
+#include "core/Wheel.h"
 #include "core/WindowFit.h"
 #include "model/ChainState.h"
 #include "model/Tone.h"
@@ -40,6 +42,7 @@
 #include "views/PluginHeader.h"
 #include "views/block/BlockCard.h"
 #include "views/block/BlockDetail.h"
+#include "views/block/BlockEqView.h"
 #include "views/browser/FilterChip.h"
 #include "views/browser/Paginator.h"
 #include "views/browser/ToneCard.h"
@@ -2811,6 +2814,259 @@ struct WindowFitTests : juce::UnitTest {
   }
 };
 
+// The EQ faders' wheel: the law and hit test are pure functions in
+// core/EqMath, so most of this needs no window. The integration half drives
+// BlockEqView directly (a hand-built MouseEvent, not the window peer) —
+// the deterministic style DragScrollerTests uses; peer-injected input tests
+// are the flaky family (docs/work/selftest-flaky-drag-tests/).
+struct EqWheelTests : juce::UnitTest {
+  EqWheelTests() : juce::UnitTest("EQ wheel", "ui") {}
+
+  // One physical click, as JUCE reports it on Windows: WHEEL_DELTA (120)
+  // through the 0.5/256 page scaling, so 0.234375 pages. This is the number
+  // that matters — my first pass assumed 0.04 pages and a tick moved 5.9 dB.
+  static constexpr float kWindowsTickPages = 0.5f * 120.0f / 256.0f;
+  static constexpr float kTickPixels = kWindowsTickPages * wheel::kPixelsPerUnit;
+
+  // A wheel event as JUCE delivers it, at a point in `target`'s space.
+  // `ticks` is in physical clicks (positive = scroll up), the unit the user
+  // thinks in, converted to the pages JUCE actually reports.
+  static void wheel(BlockEqView& target, juce::Point<float> pos, float ticks, juce::ModifierKeys mods = {}) {
+    const auto now = juce::Time::getCurrentTime();
+    const juce::MouseEvent e(juce::Desktop::getInstance().getMainMouseSource(), pos, mods, 0, 0, 0, 0, 0, &target,
+                             &target, now, pos, now, 0, false);
+    juce::MouseWheelDetails w{};
+    w.deltaY = ticks * kWindowsTickPages;
+    target.mouseWheelMove(e, w);
+  }
+
+  // A band's centre, as a point BlockEqView understands. The width is the
+  // design-time kEqNumBands, as the paint draws the columns.
+  static juce::Point<float> faderCentre(int column) {
+    const float width = static_cast<float>(eq::kGraphW - 2 * eq::kBodyPad) / static_cast<float>(kEqNumBands);
+    return {eq::kBodyPad + (static_cast<float>(column) + 0.5f) * width,
+            static_cast<float>(eq::kBodyPad) + 20.0f};
+  }
+
+  // The showing EQ editor, or null while the scenario has not opened one.
+  static BlockEqView* editor(PluginRoot& root) {
+    return dynamic_cast<BlockEqView*>(drive::find(
+        root, [](juce::Component& c) { return dynamic_cast<BlockEqView*>(&c) != nullptr && c.isShowing(); }));
+  }
+
+  void runTest() override {
+    beginTest("one click is 0.5 dB, in the direction the curve moves");
+    {
+      // A real click, not a literal: the unit is the whole point of this group.
+      expectEquals(eq::faderGainDb(kTickPixels, false), -eq::kFaderDbPerNotch);
+      expectEquals(eq::faderGainDb(-kTickPixels, false), eq::kFaderDbPerNotch);
+      expectEquals(eq::faderGainDb(0.0f, false), 0.0);
+      // Shift is the UI's shared 1/8, on the same click.
+      expectWithinAbsoluteError(eq::faderGainDb(kTickPixels, true), -eq::kFaderDbPerNotch / wheel::kFineDivisor,
+                                1e-9);
+      // 60 clicks span the whole ±15 dB range at half a dB each.
+      expectWithinAbsoluteError(eq::faderGainDb(60 * kTickPixels, false), -30.0, 1e-9);
+      expectWithinAbsoluteError(eq::faderGainDb(30 * kTickPixels, false), -15.0, 1e-9);
+    }
+
+    beginTest("the tick constant is one physical click, not a trackpad fraction of one");
+    {
+      // The first implementation used the ~0.04 pages a trackpad's fine deltas
+      // average to, so one click moved 5.9 dB. A click is WHEEL_DELTA (120)
+      // through 0.5/256 page scaling: 0.234375 pages, 120px.
+      expectEquals(kTickPixels, 120.0f);
+      expectEquals(wheel::kNotchPixels, kTickPixels);
+      // And not the trackpad figure, which is five times finer.
+      expect(wheel::kNotchPixels > 0.04f * wheel::kPixelsPerUnit * 4.0f,
+             "the shared constant is a click, not a trackpad average");
+      // Fractional clicks carry rather than being rounded away: half a click
+      // is half a dB, and that is the finest a notched wheel can report.
+      expectWithinAbsoluteError(eq::faderGainDb(0.5f * kTickPixels, false), -eq::kFaderDbPerNotch / 2.0, 1e-12);
+    }
+
+    beginTest("the direction matches the curve's Q law, which is the whole point");
+    {
+      // Graph multiplies Q by exp(-pixelsY * 0.003): pixelsY > 0 raises Q.
+      // The fader's sign has to agree, or the two disagree on one screen.
+      expect(eq::faderGainDb(kTickPixels, false) < 0.0, "scroll down cuts, as Q rises for the same gesture");
+      expect(eq::faderGainDb(-kTickPixels, false) > 0.0);
+    }
+
+    beginTest("the fader region: a column per band, -1 outside it");
+    {
+      constexpr int bands = kEqNumBands;
+      for (int i = 0; i < bands; ++i) expectEquals(eq::faderColumnAt(faderCentre(i), bands), i);
+      // Above the top pad, on the label row, left of the gutter, past the last band.
+      expectEquals(eq::faderColumnAt({200.0f, static_cast<float>(eq::kBodyPad) - 1.0f}, bands), -1);
+      expectEquals(eq::faderColumnAt({200.0f, static_cast<float>(eq::kBodyH) - 1.0f}, bands), -1);
+      expectEquals(eq::faderColumnAt({static_cast<float>(eq::kBodyPad) - 1.0f, 100.0f}, bands), -1);
+      expectEquals(eq::faderColumnAt({static_cast<float>(eq::kGraphW) - 1.0f, 100.0f}, bands), -1);
+      // The width is the design-time count, as the paint draws it; bandCount
+      // only clamps the index, so a short chain cannot index past its end.
+      expectEquals(eq::faderColumnAt(faderCentre(1), 3), 1);
+      expectEquals(eq::faderColumnAt(faderCentre(5), 3), 2);
+      expectEquals(eq::faderColumnAt({100.0f, 100.0f}, 0), -1);
+    }
+
+    beginTest("the region and the travel agree on where a fader is");
+    {
+      // faderRegion() lives in EqMath and travelBounds() in the view; if they
+      // drift, a grab lands on a column the paint does not draw.
+      const auto region = eq::faderRegion();
+      expectEquals(juce::roundToInt(region.getX()), eq::kBodyPad);
+      expectEquals(juce::roundToInt(region.getY()), eq::kBodyPad);
+      expect(region.getBottom() <= static_cast<float>(eq::kBodyH), "the region stays inside the body");
+      expect(region.getHeight() > 0.0f);
+    }
+
+    beginTest("a wheel over a fader moves that band and nothing else");
+    {
+      LiveScenario live(*this, "main-detail-eq-sliders");
+      if (!live.ok) return;
+      live.drive();
+      auto* eqView = editor(live.root());
+      expect(eqView != nullptr, "the EQ editor is showing");
+      if (eqView == nullptr) return;
+
+      const auto before = eqView->bands();
+      expect(before.size() >= 3, "the fixture has bands");
+      if (before.size() < 3) return;
+      // blk-2: lowcut 80, bell 220 (-2.5), bell 800 (+3), bell 2200 (+1.5),
+      // bell 4500 (-1), highcut 9.5k. Column 2 is the 800 Hz bell.
+      constexpr int column = 2;
+      const auto col = static_cast<size_t>(column);
+      expect(eq::hasGain(before[col].type), "the chosen column is a bell");
+      if (!eq::hasGain(before[col].type)) return;
+      const double start = before[col].gainDb;
+
+      // Scroll up over that fader: it boosts, and only it. JUCE's deltaY is
+      // positive for the wheel moving up, which is the same sign the curve's
+      // Q law reads as a rise.
+      wheel(*eqView, faderCentre(column), 1.0f);
+      const auto after = eqView->bands();
+      expectWithinAbsoluteError(after[col].gainDb, start + eq::kFaderDbPerNotch, 1e-9);
+      for (size_t i = 0; i < after.size(); ++i) {
+        if (i == col) continue;
+        expectWithinAbsoluteError(after[i].gainDb, before[i].gainDb, 0.0);
+        expectWithinAbsoluteError(after[i].freqHz, before[i].freqHz, 0.0);
+        expectWithinAbsoluteError(after[i].q, before[i].q, 0.0);
+      }
+
+      // Scrolling back down returns it exactly where it started.
+      wheel(*eqView, faderCentre(column), -1.0f);
+      expectWithinAbsoluteError(eqView->bands()[col].gainDb, start, 1e-9);
+    }
+
+    beginTest("a pass band, the label row and the gutter take no wheel");
+    {
+      LiveScenario live(*this, "main-detail-eq-sliders");
+      if (!live.ok) return;
+      live.drive();
+      auto* eqView = editor(live.root());
+      expect(eqView != nullptr);
+      if (eqView == nullptr) return;
+      const auto before = eqView->bands();
+      if (before.size() < 6) return;
+
+      // Columns 0 and 5 are the low/high cut in the fixture: no gain to turn.
+      expect(!eq::hasGain(before[0].type) && !eq::hasGain(before[5].type), "the fixture's ends are cuts");
+      wheel(*eqView, faderCentre(0), 1.0f);
+      wheel(*eqView, faderCentre(5), 1.0f);
+      wheel(*eqView, {200.0f, static_cast<float>(eq::kBodyH) - 4.0f}, 1.0f);  // the label row
+      wheel(*eqView, {4.0f, 100.0f}, 1.0f);                                  // the left gutter
+      const auto after = eqView->bands();
+      for (size_t i = 0; i < after.size(); ++i) {
+        expectWithinAbsoluteError(after[i].gainDb, before[i].gainDb, 0.0);
+        expectWithinAbsoluteError(after[i].q, before[i].q, 0.0);
+      }
+    }
+
+    beginTest("a hard stop is silent: no write, no burst, and the band stays put");
+    {
+      LiveScenario live(*this, "main-detail-eq-sliders");
+      if (!live.ok) return;
+      live.drive();
+      auto* eqView = editor(live.root());
+      expect(eqView != nullptr);
+      if (eqView == nullptr) return;
+      const auto start = eqView->bands();
+      if (start.size() < 3) return;
+      constexpr int column = 2;
+      const auto col = static_cast<size_t>(column);
+      if (!eq::hasGain(start[col].type)) return;
+      const auto at = faderCentre(column);
+
+      // 40 notches up: it lands exactly on the clamp and stops there.
+      // 40 clicks up is 20 dB: more than the 12 dB of headroom above +3 dB.
+      for (int i = 0; i < 40; ++i) wheel(*eqView, at, 1.0f);
+      expectWithinAbsoluteError(eqView->bands()[col].gainDb, kEqMaxAbsGainDb, 1e-9);
+      live.pump(400);  // let that burst end, so this measures only the next event
+
+      // One more notch past the top writes nothing, so no burst opens. From
+      // outside that shows as the view taking native snapshots again at
+      // once (dragging_ is private; setBands is the observable).
+      wheel(*eqView, at, 1.0f);
+      expectWithinAbsoluteError(eqView->bands()[col].gainDb, kEqMaxAbsGainDb, 1e-9, "no write past the end");
+      auto sent = eqView->bands();
+      sent[col].gainDb = -3.25;
+      eqView->setBands(sent);
+      expectWithinAbsoluteError(eqView->bands()[col].gainDb, -3.25, 1e-12, "no burst was opened at the stop");
+    }
+
+    beginTest("a burst suppresses native snapshots and then ends by itself");
+    {
+      LiveScenario live(*this, "main-detail-eq-sliders");
+      if (!live.ok) return;
+      live.drive();
+      auto* eqView = editor(live.root());
+      expect(eqView != nullptr);
+      if (eqView == nullptr) return;
+      const auto start = eqView->bands();
+      if (start.size() < 3) return;
+      constexpr int column = 2;
+      const auto col = static_cast<size_t>(column);
+      if (!eq::hasGain(start[col].type)) return;
+      const auto at = faderCentre(column);
+
+      wheel(*eqView, at, 1.0f);
+      const double afterOne = eqView->bands()[col].gainDb;
+      expectWithinAbsoluteError(afterOne, start[col].gainDb + eq::kFaderDbPerNotch, 1e-9, "the click landed");
+
+      // Mid-burst a snapshot is ignored, so a stale native value cannot
+      // revert the event the user just made.
+      auto stale = start;
+      stale[col].gainDb = 12.0;
+      eqView->setBands(stale);
+      expectWithinAbsoluteError(eqView->bands()[col].gainDb, afterOne, 1e-12, "mid-burst snapshot ignored");
+
+      // 250 ms after the last event the burst has ended and snapshots land
+      // again -- the timer, not a mouseUp, is what clears it.
+      live.pump(400);
+      eqView->setBands(stale);
+      expectWithinAbsoluteError(eqView->bands()[col].gainDb, 12.0, 1e-12, "the burst ended on its own");
+    }
+
+    beginTest("a bypassed EQ takes no wheel");
+    {
+      LiveScenario live(*this, "main-detail-eq-sliders");
+      if (!live.ok) return;
+      live.drive();
+      auto* eqView = editor(live.root());
+      expect(eqView != nullptr);
+      if (eqView == nullptr) return;
+      const auto before = eqView->bands();
+      if (before.size() < 3) return;
+      // The header's power toggle is the path a user takes; drive the same
+      // state it sets.
+      eqView->setEqEnabled(false);
+      expect(!eqView->eqEnabled());
+      wheel(*eqView, faderCentre(2), 1.0f);
+      const auto after = eqView->bands();
+      for (size_t i = 0; i < after.size(); ++i) expectWithinAbsoluteError(after[i].gainDb, before[i].gainDb, 0.0);
+    }
+  }
+};
+
 HtmlTests htmlTests;
 FontTests fontTests;
 RichFlowTests richFlowTests;
@@ -2842,6 +3098,7 @@ Tone3000ClientTests tone3000ClientTests;
 ToneModelTests toneModelTests;
 ToneQueryTests toneQueryTests;
 ReadoutTests readoutTests;
+EqWheelTests eqWheelTests;
 
 }  // namespace
 
