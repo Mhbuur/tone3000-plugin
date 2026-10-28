@@ -507,12 +507,19 @@ with the same parameter ids so attachments behave identically in the testbed.
 
 **Knob wheel.** `Knob` also takes the scroll wheel, over the face only (the
 label slot stays a tap target for the type-in editor) and never while the
-editor is open. One notch moves ~1 % of the range; Shift divides by 8, the
-same rule as a drag and as the EQ curve's handler. A detented knob
-(`Options::steps`) steps exactly one detent per notch and carries fractional
-notches, so a slow trackpad gesture still lands on a detent. Inertial events
-are ignored: momentum outlives the finger, and a value that creeps after
-release is a bug.
+editor is open. One click moves what one arrow key moves — 1 % of the range —
+and a forward turn (away from the user) raises the value, the same direction
+as this knob's drag and arrow keys, the EQ curve's Q and the EQ faders. Shift
+divides by 8, the same rule as a drag and as the EQ curve's handler. A
+detented knob (`Options::steps`) steps exactly one detent per click and
+carries fractional clicks, so a slow trackpad gesture still lands on a detent.
+Inertial events are ignored: momentum outlives the finger, and a value that
+creeps after release is a bug.
+
+One click is `wheel::kNotchPixels` — `WHEEL_DELTA` (120) through JUCE's
+0.5/256 page scaling, i.e. 120 px — so `kWheelSensitivity` is `kKeyStep / 120`,
+not a hand-picked fraction. An earlier version calibrated against 0.04 pages
+(a trackpad's fine delta) and moved 5.9× too far per click.
 
 A burst of wheel events is one host gesture (`beginGesture` on the first,
 `endGesture` ~250 ms after the last) so automation records one point, not one
