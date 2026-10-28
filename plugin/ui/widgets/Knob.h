@@ -9,10 +9,11 @@
 // - Double-click opens inline text entry in real units (Enter commits,
 //   Escape cancels, blur commits).
 // - Alt/Option-click resets to the default value (when one is declared).
-// - Scroll wheel over the face adjusts it, Shift for 8x finer; a detented knob
-//   steps one detent per notch. Inertial (momentum) events are ignored. Inside
-//   a scrolling lane the burst belongs to whatever was under the pointer when
-//   it began (see DragScroller::claimWheelBurst).
+// - Scroll wheel over the face adjusts it; a forward turn raises the value,
+//   one click moves what one arrow key moves, Shift for 8x finer; a detented
+//   knob steps one detent per click. Inertial (momentum) events are ignored.
+//   Inside a scrolling lane the burst belongs to whatever was under the
+//   pointer when it began (see DragScroller::claimWheelBurst).
 // On a touch screen: double tap resets, tapping the label opens the editor,
 // and a touch-and-hold fires onLongPress (the right-click of the platform).
 // From the keyboard (Tab to the knob; a click never focuses it): arrows step

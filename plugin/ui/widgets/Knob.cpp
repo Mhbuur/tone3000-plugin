@@ -64,11 +64,13 @@ constexpr float kDetent = 0.02f;
 constexpr float kKeyStep = 0.01f;
 constexpr int kKeyReadoutMs = 600;
 
-// Wheel. One notched click is ~0.04 JUCE "pages", and core/Wheel.h maps a page
-// to 512 web px, so a notch is ~20.48 px. Sensitivity is per web px: ~1 % of
-// the range per notch, where the drag's 0.006 would jump 12 % per click.
-constexpr double kWheelPixelsPerNotch = 20.48;
-constexpr float kWheelSensitivity = 0.0005f;
+// Wheel. A notched click is WHEEL_DELTA (120) through JUCE's 0.5/256 page
+// scaling, which core/Wheel.h converts to wheel::kNotchPixels web px — 120,
+// not the ~20 a trackpad's fine delta averages to. Sensitivity is per web px,
+// set here as one click = one arrow key (kKeyStep) so the two agree: ~1 % of
+// the range per click, where the drag's 0.006 per px would jump far more.
+constexpr double kWheelPixelsPerNotch = wheel::kNotchPixels;
+constexpr float kWheelSensitivity = kKeyStep / static_cast<float>(wheel::kNotchPixels);
 // A gap longer than this starts a new burst; matches DragScroller::kWheelBurstMs
 // so one burst is one host gesture.
 constexpr int kWheelBurstMs = 250;
@@ -277,6 +279,11 @@ void Knob::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetai
 
   const float px = wheel::pixelsY(wheel);
   if (juce::exactlyEqual(px, 0.0f)) return;
+  // A forward turn (away from the user) raises the value, as it does for this
+  // knob's own drag and arrow keys, for the EQ curve's Q, and for the EQ's
+  // faders. wheel::pixelsY is negative for a forward turn, so negate once here
+  // and read `forward` as "the way a gesture that increases the value goes".
+  const float forward = -px;
 
   // A burst belongs to whatever was under the pointer when it began: inside a
   // scrolling lane, a pan that slides this knob under the pointer must not edit.
@@ -293,9 +300,10 @@ void Knob::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetai
     // One detent per notch whatever the event's magnitude; a fractional notch
     // carries, so a slow trackpad gesture still steps exactly once.
     const double unit = (options_.max - options_.min) / static_cast<double>(*options_.steps - 1);
-    wheelNotch_ += static_cast<double>(px) / kWheelPixelsPerNotch;
-    // A real notch lands a hair under one in float arithmetic (0.04f × 512 is
-    // 20.4799, not 20.48), so treat a near-whole notch as whole.
+    wheelNotch_ += static_cast<double>(forward) / kWheelPixelsPerNotch;
+    // A click lands exactly on 1.0, but a trackpad sends fractions of one, so
+    // the accumulator still has to reach a whole detent from an inexact sum:
+    // treat a near-whole notch as whole.
     constexpr double kNotchEpsilon = 1.0e-3;
     const int notches = static_cast<int>(wheelNotch_ >= 0.0 ? wheelNotch_ + kNotchEpsilon
                                                             : wheelNotch_ - kNotchEpsilon);
@@ -305,7 +313,7 @@ void Knob::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetai
     // from the raw accumulator would emit twice, settling then stepping.
     target = emitted_ + static_cast<float>(unit * static_cast<double>(notches));
   } else {
-    target = live_ + px * kWheelSensitivity * (fine ? 1.0f / kFineFactor : 1.0f);
+    target = live_ + forward * kWheelSensitivity * (fine ? 1.0f / kFineFactor : 1.0f);
   }
 
   // Nothing to write (already at an end, or the notch lands on the detent the
